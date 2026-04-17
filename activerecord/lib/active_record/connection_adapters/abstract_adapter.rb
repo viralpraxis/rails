@@ -5,6 +5,7 @@ require "active_record/connection_adapters/abstract/schema_dumper"
 require "active_record/connection_adapters/abstract/schema_creation"
 require "active_support/concurrency/null_lock"
 require "active_support/concurrency/load_interlock_aware_monitor"
+require "active_support/concurrency/thread_monitor"
 require "arel/collectors/bind"
 require "arel/collectors/composite"
 require "arel/collectors/sql_string"
@@ -29,6 +30,19 @@ module ActiveRecord
     # notably, the instance methods provided by SchemaStatements are very useful.
     class AbstractAdapter
       ADAPTER_NAME = "Abstract"
+
+      ##
+      # :singleton-method: migration_strategy
+      #
+      # Allows configuration of migration strategy per adapter type.
+      # When set on a specific adapter class (e.g., PostgreSQLAdapter),
+      # all migrations using that adapter will use the specified strategy
+      # instead of the global ActiveRecord.migration_strategy.
+      #
+      #   ActiveRecord::ConnectionAdapters::PostgreSQLAdapter.migration_strategy = CustomPostgresStrategy
+      #   ActiveRecord::ConnectionAdapters::Mysql2Adapter.migration_strategy = CustomMySQLStrategy
+      class_attribute :migration_strategy, instance_writer: false
+
       include ActiveSupport::Callbacks
       define_callbacks :checkout, :checkin
 
@@ -42,7 +56,7 @@ module ActiveRecord
 
       attr_reader :pool
       attr_reader :visitor, :owner, :logger, :lock
-      attr_accessor :allow_preconnect
+      attr_reader :allow_preconnect # :nodoc:
       attr_accessor :pinned # :nodoc:
       alias :in_use? :owner
 
@@ -52,7 +66,11 @@ module ActiveRecord
         @pool = value
       end
 
-      set_callback :checkin, :after, :enable_lazy_transactions!
+      def allow_preconnect=(value) # :nodoc:
+        @lock.synchronize do
+          @allow_preconnect = value
+        end
+      end
 
       def self.type_cast_config_to_integer(config)
         if config.is_a?(Integer)
@@ -121,7 +139,7 @@ module ActiveRecord
 
       # Opens a database console session.
       def self.dbconsole(config, options = {})
-        raise NotImplementedError.new("#{self.class} should define `dbconsole` that accepts a db config and options to implement connecting to the db console")
+        raise NotImplementedError.new("#{self} should define `dbconsole` that accepts a db config and options to implement connecting to the db console")
       end
 
       def initialize(config_or_deprecated_connection, deprecated_logger = nil, deprecated_connection_options = nil, deprecated_config = nil) # :nodoc:
@@ -157,7 +175,7 @@ module ActiveRecord
         @pinned = false
         @pool = ActiveRecord::ConnectionAdapters::NullPool.new
         @idle_since = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-        @allow_preconnect = true
+        @allow_preconnect = false
         @visitor = arel_visitor
         @statements = build_statement_pool
         self.lock_thread = nil
@@ -190,17 +208,11 @@ module ActiveRecord
         @lock =
         case lock_thread
         when Thread
-          ActiveSupport::Concurrency::ThreadLoadInterlockAwareMonitor.new
+          ActiveSupport::Concurrency::ThreadMonitor.new
         when Fiber
-          ActiveSupport::Concurrency::LoadInterlockAwareMonitor.new
+          ::Monitor.new
         else
           ActiveSupport::Concurrency::NullLock
-        end
-      end
-
-      def check_if_write_query(sql) # :nodoc:
-        if preventing_writes? && write_query?(sql)
-          raise ActiveRecord::ReadOnlyError, "Write query attempted while in readonly mode: #{sql}"
         end
       end
 
@@ -329,8 +341,12 @@ module ActiveRecord
               "Current thread: #{ActiveSupport::IsolatedExecutionState.context}."
           end
 
-          @idle_since = Process.clock_gettime(Process::CLOCK_MONOTONIC) if update_idle
-          @owner = nil
+          _run_checkin_callbacks do
+            @idle_since = Process.clock_gettime(Process::CLOCK_MONOTONIC) if update_idle
+            @owner = nil
+            enable_lazy_transactions!
+            unset_query_cache!
+          end
         else
           raise ActiveRecordError, "Cannot expire connection, it is not currently leased."
         end
@@ -704,37 +720,36 @@ module ActiveRecord
         deadline = retry_deadline && Process.clock_gettime(Process::CLOCK_MONOTONIC) + retry_deadline
 
         @lock.synchronize do
-          @allow_preconnect = false
+          attempt_configure_connection do
+            @allow_preconnect = false
 
-          reconnect
+            reconnect
 
-          enable_lazy_transactions!
-          @raw_connection_dirty = false
-          @last_activity = @connected_since = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-          @verified = true
-          @allow_preconnect = true
+            enable_lazy_transactions!
+            @raw_connection_dirty = false
+            @last_activity = @connected_since = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+            @verified = true
+            @allow_preconnect = true
 
-          reset_transaction(restore: restore_transactions) do
-            clear_cache!(new_connection: true)
-            attempt_configure_connection
-          end
-        rescue => original_exception
-          translated_exception = translate_exception_class(original_exception, nil, nil)
-          retry_deadline_exceeded = deadline && deadline < Process.clock_gettime(Process::CLOCK_MONOTONIC)
-
-          if !retry_deadline_exceeded && retries_available > 0
-            retries_available -= 1
-
-            if retryable_connection_error?(translated_exception)
-              backoff(connection_retries - retries_available)
-              retry
+            reset_transaction(restore: restore_transactions) do
+              clear_cache!(new_connection: true)
+              configure_connection
             end
+          rescue => original_exception
+            translated_exception = translate_exception_class(original_exception, nil, nil)
+            retry_deadline_exceeded = deadline && deadline < Process.clock_gettime(Process::CLOCK_MONOTONIC)
+
+            if !retry_deadline_exceeded && retries_available > 0
+              retries_available -= 1
+
+              if retryable_connection_error?(translated_exception)
+                backoff(connection_retries - retries_available)
+                retry
+              end
+            end
+
+            raise translated_exception
           end
-
-          @last_activity = nil
-          @verified = false
-
-          raise translated_exception
         end
       end
 
@@ -746,6 +761,8 @@ module ActiveRecord
           reset_transaction
           @raw_connection_dirty = false
           @connected_since = nil
+          @last_activity = nil
+          @verified = false
         end
       end
 
@@ -768,9 +785,11 @@ module ActiveRecord
       # should call super immediately after resetting the connection (and while
       # still holding @lock).
       def reset!
-        clear_cache!(new_connection: true)
-        reset_transaction
-        attempt_configure_connection
+        attempt_configure_connection do
+          clear_cache!(new_connection: true)
+          reset_transaction
+          configure_connection
+        end
       end
 
       # Removes the connection from the pool and disconnect it.
@@ -797,6 +816,12 @@ module ActiveRecord
         false
       end
 
+      def verify
+        return if @verified
+        return if (last_activity = seconds_since_last_activity) && last_activity < verify_timeout
+        verify!
+      end
+
       # Checks whether the connection to the database is still active (i.e. not stale).
       # This is done under the hood by calling #active?. If the connection
       # is no longer active, then this method will reconnect to the database.
@@ -804,12 +829,14 @@ module ActiveRecord
         unless active?
           @lock.synchronize do
             if @unconfigured_connection
-              @raw_connection = @unconfigured_connection
-              @unconfigured_connection = nil
-              attempt_configure_connection
-              @last_activity = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-              @verified = true
-              @allow_preconnect = true
+              attempt_configure_connection do
+                @raw_connection = @unconfigured_connection
+                @unconfigured_connection = nil
+                configure_connection
+                @last_activity = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+                @verified = true
+                @allow_preconnect = true
+              end
               return
             end
 
@@ -827,8 +854,11 @@ module ActiveRecord
       end
 
       def clean! # :nodoc:
-        @raw_connection_dirty = false
-        @verified = nil
+        _run_checkout_callbacks do
+          @raw_connection_dirty = false
+          @verified = nil
+        end
+        self
       end
 
       def verified? # :nodoc:
@@ -851,10 +881,6 @@ module ActiveRecord
           @raw_connection_dirty = true
           conn
         end
-      end
-
-      def default_uniqueness_comparison(attribute, value) # :nodoc:
-        attribute.eq(value)
       end
 
       def case_sensitive_comparison(attribute, value) # :nodoc:
@@ -1036,7 +1062,7 @@ module ActiveRecord
         #
         def with_raw_connection(allow_retry: false, materialize_transactions: true)
           @lock.synchronize do
-            connect! if @raw_connection.nil? && reconnect_can_restore_state?
+            connect! if !connected? && reconnect_can_restore_state?
 
             self.materialize_transactions if materialize_transactions
 
@@ -1185,23 +1211,53 @@ module ActiveRecord
           active_record_error
         end
 
-        def log(sql, name = "SQL", binds = [], type_casted_binds = [], async: false, allow_retry: false, &block) # :doc:
-          instrumenter.instrument(
-            "sql.active_record",
-            sql:               sql,
-            name:              name,
-            binds:             binds,
-            type_casted_binds: type_casted_binds,
-            async:             async,
-            allow_retry:       allow_retry,
-            connection:        self,
-            transaction:       current_transaction.user_transaction.presence,
-            affected_rows:     0,
-            row_count:         0,
-            &block
-          )
+        def log(intent_or_sql, name = "SQL", binds = [], type_casted_binds = [], async: false, allow_retry: false, &block)
+          if intent_or_sql.is_a?(QueryIntent)
+            intent = intent_or_sql
+
+            instrumenter.instrument(
+              "sql.active_record",
+              sql:               intent.processed_sql,
+              name:              intent.name,
+              binds:             intent.binds,
+              type_casted_binds: intent.type_casted_binds,
+              async:             intent.ran_async,
+              allow_retry:       intent.allow_retry,
+              connection:        self,
+              transaction:       current_transaction.user_transaction.presence,
+              affected_rows:     0,
+              row_count:         0,
+              &block
+            )
+          else
+            ActiveRecord.deprecator.warn(<<-MSG.squish)
+              Passing SQL strings to `log` is deprecated and will stop working in Rails 8.2.
+              Please pass a `QueryIntent` object instead.
+            MSG
+
+            sql = intent_or_sql
+
+            instrumenter.instrument(
+              "sql.active_record",
+              sql:               sql,
+              name:              name,
+              binds:             binds,
+              type_casted_binds: type_casted_binds,
+              async:             async,
+              allow_retry:       allow_retry,
+              connection:        self,
+              transaction:       current_transaction.user_transaction.presence,
+              affected_rows:     0,
+              row_count:         0,
+              &block
+            )
+          end
         rescue ActiveRecord::StatementInvalid => ex
-          raise ex.set_query(sql, binds)
+          if intent
+            raise ex.set_query(intent.processed_sql, intent.binds)
+          else
+            raise ex.set_query(sql, binds)
+          end
         end
 
         def instrumenter # :nodoc:
@@ -1270,7 +1326,7 @@ module ActiveRecord
         end
 
         def attempt_configure_connection
-          configure_connection
+          yield
         rescue Exception # Need to handle things such as Timeout::ExitException
           disconnect!
           raise

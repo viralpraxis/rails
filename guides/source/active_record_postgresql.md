@@ -18,7 +18,7 @@ After reading this guide, you will know:
 
 --------------------------------------------------------------------------------
 
-In order to use the PostgreSQL adapter you need to have at least version 9.3
+In order to use the PostgreSQL adapter you need to have at least version 9.5
 installed. Older versions are not supported.
 
 To get started with PostgreSQL have a look at the
@@ -28,7 +28,7 @@ It describes how to properly set up Active Record for PostgreSQL.
 Datatypes
 ---------
 
-PostgreSQL offers a number of specific datatypes. Following is a list of types,
+PostgreSQL offers a number of specific datatypes. The following is a list of types,
 that are supported by the PostgreSQL adapter.
 
 ### Bytea
@@ -102,7 +102,7 @@ NOTE: You need to enable the `hstore` extension to use hstore.
 
 ```ruby
 # db/migrate/20131009135255_create_profiles.rb
-class CreateProfiles < ActiveRecord::Migration[8.1]
+class CreateProfiles < ActiveRecord::Migration[8.2]
   enable_extension "hstore" unless extension_enabled?("hstore")
   create_table :profiles do |t|
     t.hstore "settings"
@@ -524,7 +524,7 @@ Rails migrations with timestamps store the time a model was created or updated. 
 
 ```ruby
 # db/migrate/20241220144913_create_devices.rb
-create_table :post, id: :uuid do |t|
+create_table :posts, id: :uuid do |t|
   t.datetime :published_at
   # By default, Active Record will set the data type of this column to `timestamp without time zone`.
 end
@@ -840,7 +840,7 @@ ActiveRecord::Tasks::DatabaseTasks.structure_dump_flags = ["--no-comments"]
 Explain
 -------
 
-Along with the standard [`explain`][explain-options] options, the PostgreSQL adapter supports [`buffers`][explain-analayze-buffers].
+Along with the standard [`explain`][explain-options] options, the PostgreSQL adapter supports [`buffers`][explain-analyze-buffers].
 
 ```ruby
 Company.where(id: owning_companies_ids).explain(:analyze, :buffers)
@@ -853,4 +853,4 @@ Company.where(id: owning_companies_ids).explain(:analyze, :buffers)
 See their documentation for more details.
 
 [explain-options]: active_record_querying.html#explain-options
-[explain-analayze-buffers]: https://www.postgresql.org/docs/current/sql-explain.html
+[explain-analyze-buffers]: https://www.postgresql.org/docs/current/sql-explain.html

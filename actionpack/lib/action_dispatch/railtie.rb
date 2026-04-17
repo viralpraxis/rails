@@ -4,7 +4,9 @@
 
 require "action_dispatch"
 require "action_dispatch/log_subscriber"
+require "action_dispatch/structured_event_subscriber"
 require "active_support/messages/rotation_configuration"
+require "rails/railtie"
 
 module ActionDispatch
   class Railtie < Rails::Railtie # :nodoc:
@@ -33,6 +35,7 @@ module ActionDispatch
 
     config.action_dispatch.ignore_leading_brackets = nil
     config.action_dispatch.strict_query_string_separator = nil
+    config.action_dispatch.verbose_redirect_logs = false
 
     config.action_dispatch.default_headers = {
       "X-Frame-Options" => "SAMEORIGIN",
@@ -46,6 +49,11 @@ module ActionDispatch
     config.action_dispatch.cookies_rotations = ActiveSupport::Messages::RotationConfiguration.new
 
     config.eager_load_namespaces << ActionDispatch
+
+    guard_load_hooks(
+      :action_dispatch_response, :action_dispatch_system_test_case,
+      :action_dispatch_integration_test,
+    )
 
     initializer "action_dispatch.deprecator", before: :load_environment_config do |app|
       app.deprecators[:action_dispatch] = ActionDispatch.deprecator
@@ -65,6 +73,8 @@ module ActionDispatch
       unless app.config.action_dispatch.strict_query_string_separator.nil?
         ActionDispatch::QueryParser.strict_query_string_separator = app.config.action_dispatch.strict_query_string_separator
       end
+
+      ActionDispatch.verbose_redirect_logs = app.config.action_dispatch.verbose_redirect_logs
 
       ActiveSupport.on_load(:action_dispatch_request) do
         self.ignore_accept_header = app.config.action_dispatch.ignore_accept_header

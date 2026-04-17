@@ -3,10 +3,8 @@
 source "https://rubygems.org"
 gemspec
 
-gem "minitest"
-
-# We need a newish Rake since Active Job sets its test tasks' descriptions.
-gem "rake", ">= 13"
+gem "minitest", "~> 6.0"
+gem "minitest-mock"
 
 gem "releaser", path: "tools/releaser"
 
@@ -28,10 +26,11 @@ gem "solid_queue"
 gem "solid_cable"
 gem "kamal", ">= 2.1.0", require: false
 gem "thruster", require: false
-# require: false so bcrypt is loaded only when has_secure_password is used.
+# require: false so bcrypt and argon2 are loaded only when has_secure_password is used.
 # This is to avoid Active Model (and by extension the entire framework)
-# being dependent on a binary library.
+# being dependent on binary libraries.
 gem "bcrypt", "~> 3.1.11", require: false
+gem "argon2", "~> 2.3.2", require: false
 
 # This needs to be with require false to avoid it being automatically loaded by
 # sprockets.
@@ -62,18 +61,15 @@ group :mdl do
 end
 
 group :doc do
-  gem "sdoc"
-  gem "rdoc", "< 6.10"
+  gem "sdoc", "~> 2.6.4"
   gem "redcarpet", "~> 3.6.1", platforms: :ruby
   gem "w3c_validators", "~> 1.3.6"
   gem "rouge"
-  # Workaround until https://github.com/rouge-ruby/rouge/pull/2131 is merged and released
-  gem "cgi", require: false
   gem "rubyzip", "~> 2.0"
 end
 
 # Active Support
-gem "dalli", ">= 3.0.1"
+gem "dalli"
 gem "listen", "~> 3.3", require: false
 gem "libxml-ruby", platforms: :ruby
 gem "connection_pool", require: false
@@ -100,7 +96,6 @@ gem "useragent", require: false
 group :job do
   gem "resque", require: false
   gem "resque-scheduler", require: false
-  gem "sidekiq", require: false
   gem "queue_classic", ">= 4.0.0", require: false, platforms: :ruby
   gem "sneakers", require: false
   gem "backburner", require: false
@@ -134,8 +129,6 @@ local_gemfile = File.expand_path(".Gemfile", __dir__)
 instance_eval File.read local_gemfile if File.exist? local_gemfile
 
 group :test do
-  gem "minitest-bisect", require: false
-  gem "minitest-ci", require: false
   gem "minitest-retry"
 
   platforms :mri do
@@ -156,7 +149,7 @@ platforms :ruby, :windows do
 
   group :db do
     gem "pg", "~> 1.3"
-    gem "mysql2", "~> 0.5"
+    gem "mysql2", "~> 0.5", "< 0.5.7"
     gem "trilogy", ">= 2.7.0"
   end
 end

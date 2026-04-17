@@ -30,6 +30,8 @@ class SerializersTest < ActiveSupport::TestCase
     end
   end
 
+  class TestSerializerWithoutKlass < ActiveJob::Serializers::ObjectSerializer; end
+
   setup do
     @value_object = DummyValueObject.new 123
     @original_serializers = ActiveJob::Serializers.serializers
@@ -82,6 +84,16 @@ class SerializersTest < ActiveSupport::TestCase
     assert_equal DummyValueObject.new(123), ActiveJob::Serializers.deserialize(hash)
   end
 
+  test "resets serializers when directly setting" do
+    class DummySerializerAlt < DummySerializer
+      def klass; DummySerializer end
+    end
+    ActiveJob::Serializers.add_serializers DummySerializer
+    ActiveJob::Serializers.serializers = [DummySerializerAlt]
+    assert ActiveJob::Serializers.serializers.include?(DummySerializerAlt.instance)
+    assert_not ActiveJob::Serializers.serializers.include?(DummySerializer.instance)
+  end
+
   test "adds new serializer" do
     ActiveJob::Serializers.add_serializers DummySerializer
     assert ActiveJob::Serializers.serializers.include?(DummySerializer.instance)
@@ -91,6 +103,14 @@ class SerializersTest < ActiveSupport::TestCase
     ActiveJob::Serializers.add_serializers DummySerializer
     assert_no_difference(-> { ActiveJob::Serializers.serializers.size }) do
       ActiveJob::Serializers.add_serializers DummySerializer
+    end
+  end
+
+  test "raises a deprecation warning if the klass method doesn't exist" do
+    expected_message = "TestSerializerWithoutKlass should implement a public #klass method. This will raise an error in Rails 8.2"
+
+    assert_deprecated(expected_message, ActiveJob.deprecator) do
+      ActiveJob::Serializers.add_serializers TestSerializerWithoutKlass
     end
   end
 end

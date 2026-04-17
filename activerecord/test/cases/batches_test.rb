@@ -679,6 +679,28 @@ class EachTest < ActiveRecord::TestCase
     end
   end
 
+  def test_in_batches_should_unscope_cursor_after_pluck
+    all_ids = Post.limit(2).pluck(:id)
+    found_ids = []
+    # only a single clause on id (i.e. not 'id IN (?,?) AND id = ?', but only 'id = ?')
+    assert_queries_match(/WHERE #{Regexp.escape(quote_table_name("posts.id"))} = \S+ LIMIT/) do
+      Post.where(id: all_ids).in_batches(of: 1) do |relation|
+        found_ids << relation.pick(:id)
+      end
+    end
+    assert_equal all_ids.sort, found_ids
+  end
+
+  def test_in_batches_loaded_should_unscope_cursor_after_pluck
+    all_ids = Post.limit(2).pluck(:id)
+    # only a single clause on id (i.e. not 'id IN (?,?) AND id = ?', but only 'id = ?')
+    assert_queries_match(/WHERE #{Regexp.escape(quote_table_name("posts.id"))} = \S+$/) do
+      Post.where(id: all_ids).in_batches(of: 1, load: true) do |relation|
+        relation.delete_all
+      end
+    end
+  end
+
   def test_in_batches_should_quote_batch_order
     assert_queries_match(/ORDER BY #{Regexp.escape(quote_table_name("posts.id"))}/) do
       Post.in_batches(of: 1) do |relation|
@@ -904,6 +926,18 @@ class EachTest < ActiveRecord::TestCase
       total      = 0
 
       Post.limit(limit).in_batches(of: batch_size, load: load) do |batch|
+        total += batch.count
+      end
+
+      assert_equal limit, total
+    end
+
+    test "in_batches should return limit records when limit is greater than batch size with use_ranges and load is #{load}" do
+      limit = 5
+      batch_size = 3
+      total = 0
+
+      Post.limit(limit).in_batches(of: batch_size, load: load, use_ranges: true) do |batch|
         total += batch.count
       end
 

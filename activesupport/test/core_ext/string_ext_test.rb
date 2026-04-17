@@ -611,17 +611,10 @@ class StringConversionsTest < ActiveSupport::TestCase
 
   def test_string_to_time_utc_offset
     with_env_tz "US/Eastern" do
-      if ActiveSupport.to_time_preserves_timezone
-        assert_equal 0, "2005-02-27 23:50".to_time(:utc).utc_offset
-        assert_equal(-18000, "2005-02-27 23:50".to_time.utc_offset)
-        assert_equal 0, "2005-02-27 22:50 -0100".to_time(:utc).utc_offset
-        assert_equal(-3600, "2005-02-27 22:50 -0100".to_time.utc_offset)
-      else
-        assert_equal 0, "2005-02-27 23:50".to_time(:utc).utc_offset
-        assert_equal(-18000, "2005-02-27 23:50".to_time.utc_offset)
-        assert_equal 0, "2005-02-27 22:50 -0100".to_time(:utc).utc_offset
-        assert_equal(-18000, "2005-02-27 22:50 -0100".to_time.utc_offset)
-      end
+      assert_equal 0, "2005-02-27 23:50".to_time(:utc).utc_offset
+      assert_equal(-18000, "2005-02-27 23:50".to_time.utc_offset)
+      assert_equal 0, "2005-02-27 22:50 -0100".to_time(:utc).utc_offset
+      assert_equal(-3600, "2005-02-27 22:50 -0100".to_time.utc_offset)
     end
   end
 
@@ -790,21 +783,11 @@ class CoreExtStringMultibyteTest < ActiveSupport::TestCase
   EUC_JP_STRING = "さよなら".encode("EUC-JP")
   INVALID_UTF8_STRING = "\270\236\010\210\245"
 
-  def test_core_ext_adds_mb_chars
-    assert_respond_to UTF8_STRING, :mb_chars
-  end
-
   def test_string_should_recognize_utf8_strings
     assert_predicate UTF8_STRING, :is_utf8?
     assert_predicate ASCII_STRING, :is_utf8?
     assert_not_predicate EUC_JP_STRING, :is_utf8?
     assert_not_predicate INVALID_UTF8_STRING, :is_utf8?
-  end
-
-  def test_mb_chars_returns_instance_of_proxy_class
-    assert_deprecated ActiveSupport.deprecator do
-      assert_kind_of ActiveSupport::Multibyte.proxy_class, UTF8_STRING.mb_chars
-    end
   end
 end
 

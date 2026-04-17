@@ -75,18 +75,14 @@ class TransactionIsolationTest < ActiveRecord::TestCase
     test "pool_transaction_isolation_level" do
       assert_nil Tag.pool_transaction_isolation_level
 
-      events = []
-      ActiveSupport::Notifications.subscribed(
-        -> (event) { events << event.payload[:sql] },
-        "sql.active_record",
-      ) do
+      events = capture_notifications("sql.active_record") do
         Tag.with_pool_transaction_isolation_level(:read_committed) do
           assert_equal :read_committed, Tag.pool_transaction_isolation_level
           Tag.transaction do
             Tag.create!(name: "jon")
           end
         end
-      end
+      end.map { |e| e.payload[:sql] }
       assert_begin_isolation_level_event(events)
     end
 
@@ -101,11 +97,7 @@ class TransactionIsolationTest < ActiveRecord::TestCase
     test "pool_transaction_isolation_level but transaction overrides isolation" do
       assert_nil Tag.pool_transaction_isolation_level
 
-      events = []
-      ActiveSupport::Notifications.subscribed(
-        -> (event) { events << event.payload[:sql] },
-        "sql.active_record",
-      ) do
+      events = capture_notifications("sql.active_record") do
         Tag.with_pool_transaction_isolation_level(:read_committed) do
           assert_equal :read_committed, Tag.pool_transaction_isolation_level
 
@@ -113,7 +105,7 @@ class TransactionIsolationTest < ActiveRecord::TestCase
             Tag.create!(name: "jon")
           end
         end
-      end
+      end.map { |e| e.payload[:sql] }
 
       assert_begin_isolation_level_event(events, isolation: "REPEATABLE READ")
     end
@@ -121,11 +113,7 @@ class TransactionIsolationTest < ActiveRecord::TestCase
     test "with_transaction_isolation_level explicit transaction" do
       assert_nil ActiveRecord.default_transaction_isolation_level
 
-      events = []
-      ActiveSupport::Notifications.subscribed(
-        -> (event) { events << event.payload[:sql] },
-        "sql.active_record",
-      ) do
+      events = capture_notifications("sql.active_record") do
         assert_nil Tag.connection_pool.pool_transaction_isolation_level
         assert_nil Dog.connection_pool.pool_transaction_isolation_level
 
@@ -139,7 +127,7 @@ class TransactionIsolationTest < ActiveRecord::TestCase
             Dog.create!
           end
         end
-      end
+      end.map { |e| e.payload[:sql] }
 
       assert_nil Tag.connection_pool.pool_transaction_isolation_level
       assert_nil Dog.connection_pool.pool_transaction_isolation_level
@@ -149,18 +137,14 @@ class TransactionIsolationTest < ActiveRecord::TestCase
     test "with_transaction_isolation_level implicit transaction" do
       assert_nil ActiveRecord.default_transaction_isolation_level
 
-      events = []
-      ActiveSupport::Notifications.subscribed(
-        -> (event) { events << event.payload[:sql] },
-        "sql.active_record",
-      ) do
+      events = capture_notifications("sql.active_record") do
         ActiveRecord.with_transaction_isolation_level(:read_committed) do
           assert_equal :read_committed, ActiveRecord.default_transaction_isolation_level
 
           Tag.create!(name: "jon")
           Dog.create!
         end
-      end
+      end.map { |e| e.payload[:sql] }
 
       assert_begin_isolation_level_event(events, count: 2)
     end
@@ -194,11 +178,7 @@ class TransactionIsolationTest < ActiveRecord::TestCase
     test "with_transaction_isolation_level but transaction overrides isolation" do
       assert_nil ActiveRecord.default_transaction_isolation_level
 
-      events = []
-      ActiveSupport::Notifications.subscribed(
-        -> (event) { events << event.payload[:sql] },
-        "sql.active_record",
-      ) do
+      events = capture_notifications("sql.active_record") do
         ActiveRecord.with_transaction_isolation_level(:read_committed) do
           assert_equal :read_committed, ActiveRecord.default_transaction_isolation_level
 
@@ -206,7 +186,7 @@ class TransactionIsolationTest < ActiveRecord::TestCase
             Dog.create!
           end
         end
-      end
+      end.map { |e| e.payload[:sql] }
 
       assert_begin_isolation_level_event(events, isolation: "REPEATABLE READ")
     end
@@ -300,5 +280,65 @@ class TransactionIsolationTest < ActiveRecord::TestCase
           assert_equal count, events.select { _1.match(/SET TRANSACTION ISOLATION LEVEL #{isolation}/) }.size
         end
       end
+  end
+end
+
+class TransactionIsolationWithTransactionalTestsTest < ActiveRecord::TestCase
+  if ActiveRecord::Base.lease_connection.supports_transaction_isolation? && !current_adapter?(:SQLite3Adapter)
+    class Tag < ActiveRecord::Base
+      self.table_name = "tags"
+    end
+
+    test "starting a transaction with isolation does not raise an error" do
+      assert_nothing_raised do
+        Tag.transaction(isolation: :read_committed) do
+          Tag.create!
+        end
+      end
+    end
+
+    test "starting a transaction with isolation sets the isolation level" do
+      Tag.transaction(isolation: :read_committed) do
+        assert_equal :read_committed, Tag.lease_connection.current_transaction.isolation
+      end
+      assert_nil Tag.lease_connection.current_transaction.isolation
+    end
+
+    test "starting a transaction with isolation and requires_new sets the isolation level" do
+      Tag.transaction(isolation: :read_committed, requires_new: true) do
+        assert_equal :read_committed, Tag.lease_connection.current_transaction.isolation
+      end
+      assert_nil Tag.lease_connection.current_transaction.isolation
+    end
+
+    test "starting a transaction with a different isolation level raises an error" do
+      Tag.transaction(isolation: :read_committed) do
+        Tag.create!
+
+        assert_raises(ActiveRecord::TransactionIsolationError) do
+          Tag.transaction(isolation: :repeatable_read) do
+            Tag.create!
+          end
+        end
+      end
+    end
+
+    test "specifying the same isolation level does not raise an error" do
+      assert_nothing_raised do
+        Tag.transaction(isolation: :read_committed) do
+          Tag.create!
+
+          Tag.transaction(isolation: :read_committed) do
+            Tag.create!
+          end
+        end
+      end
+    end
+
+    test "invalid isolation level raises TransactionIsolationError" do
+      assert_raises(ActiveRecord::TransactionIsolationError) do
+        Tag.transaction(isolation: :unknown_level) { Tag.create! }
+      end
+    end
   end
 end

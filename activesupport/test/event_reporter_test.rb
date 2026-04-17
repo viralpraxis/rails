@@ -11,6 +11,12 @@ module ActiveSupport
     setup do
       @subscriber = EventReporter::TestHelper::EventSubscriber.new
       @reporter = EventReporter.new(@subscriber, raise_on_error: true)
+      @old_debug_mode = @reporter.debug_mode?
+      @reporter.debug_mode = false
+    end
+
+    teardown do
+      @reporter.debug_mode = @old_debug_mode
     end
 
     class TestEvent
@@ -259,11 +265,76 @@ module ActiveSupport
       end
     end
 
+    test "#notify with filter_payload: false skips payload filtering" do
+      filter = ActiveSupport::ParameterFilter.new([:name], mask: "[FILTERED]")
+      @reporter.stub(:payload_filter, filter) do
+        assert_called_with(@subscriber, :emit, [
+          event_matcher(name: "test_event", payload: { name: "Person Load", sql: "SELECT 1" })
+        ]) do
+          @reporter.notify(:test_event, filter_payload: false, name: "Person Load", sql: "SELECT 1")
+        end
+      end
+    end
+
+    test "#notify with filter_payload: false and hash payload skips filtering" do
+      filter = ActiveSupport::ParameterFilter.new([:name], mask: "[FILTERED]")
+      @reporter.stub(:payload_filter, filter) do
+        assert_called_with(@subscriber, :emit, [
+          event_matcher(name: "test_event", payload: { name: "Person Load" })
+        ]) do
+          @reporter.notify(:test_event, { name: "Person Load" }, filter_payload: false)
+        end
+      end
+    end
+
+    test "#debug with filter_payload: false skips payload filtering" do
+      filter = ActiveSupport::ParameterFilter.new([:name], mask: "[FILTERED]")
+      @reporter.stub(:payload_filter, filter) do
+        @reporter.with_debug do
+          assert_called_with(@subscriber, :emit, [
+            event_matcher(name: "test_event", payload: { name: "Person Load" })
+          ]) do
+            @reporter.debug(:test_event, filter_payload: false, name: "Person Load")
+          end
+        end
+      end
+    end
+
+    test "default filter_parameters is used by default" do
+      old_filter_parameters = ActiveSupport.filter_parameters
+      ActiveSupport.filter_parameters = [:secret]
+
+      assert_called_with(@subscriber, :emit, [
+        event_matcher(name: "test_event", payload: { key: "value", secret: "[FILTERED]" })
+      ]) do
+        @reporter.notify(:test_event, { key: "value", secret: "hello" })
+      end
+    ensure
+      ActiveSupport.filter_parameters = old_filter_parameters
+    end
+
+    test ".filter_parameters is used when present" do
+      old_filter_parameters = EventReporter.filter_parameters
+      EventReporter.filter_parameters = [:foo]
+
+      assert_called_with(@subscriber, :emit, [
+        event_matcher(name: "test_event", payload: { key: "value", foo: "[FILTERED]" })
+      ]) do
+        @reporter.notify(:test_event, { key: "value", foo: "hello" })
+      end
+    ensure
+      EventReporter.filter_parameters = old_filter_parameters
+    end
+
     test "#with_debug" do
       @reporter.with_debug do
         assert_predicate @reporter, :debug_mode?
       end
       assert_not_predicate @reporter, :debug_mode?
+    end
+
+    test "#debug_mode? returns true by default" do
+      assert @old_debug_mode
     end
 
     test "#debug_mode? returns true when debug_mode=true is set" do
@@ -564,6 +635,27 @@ module ActiveSupport
           @reporter.notify(:test_event, key: "value")
         end
       end
+    end
+
+    test "payload filter reloading" do
+      @reporter.notify(:some_event, test: true)
+      ActiveSupport.filter_parameters << :param_to_be_filtered
+
+      assert_called_with(@subscriber, :emit, [
+        event_matcher(name: "some_event", payload: { param_to_be_filtered: "test" })
+      ]) do
+        @reporter.notify(:some_event, param_to_be_filtered: "test")
+      end
+
+      @reporter.reload_payload_filter
+
+      assert_called_with(@subscriber, :emit, [
+        event_matcher(name: "some_event", payload: { param_to_be_filtered: "[FILTERED]" })
+      ]) do
+        @reporter.notify(:some_event, param_to_be_filtered: "test")
+      end
+    ensure
+      ActiveSupport.filter_parameters.pop
     end
   end
 

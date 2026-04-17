@@ -124,6 +124,7 @@ module ActiveRecord
       def after_commit; yield; end
       def after_rollback; end
       def user_transaction; ActiveRecord::Transaction::NULL_TRANSACTION; end
+      def isolation=(_); end
     end
 
     class Transaction # :nodoc:
@@ -147,13 +148,16 @@ module ActiveRecord
       end
 
       attr_reader :connection, :state, :savepoint_name, :isolation_level, :user_transaction
-      attr_accessor :written
 
       delegate :invalidate!, :invalidated?, to: :@state
 
       # Returns the isolation level if it was explicitly set, nil otherwise
       def isolation
         @isolation_level
+      end
+
+      def isolation=(isolation) # :nodoc:
+        @isolation_level = isolation
       end
 
       def initialize(connection, isolation: nil, joinable: true, run_commit_callbacks: false)
@@ -426,6 +430,10 @@ module ActiveRecord
         @parent_transaction.isolation
       end
 
+      def isolation=(isolation) # :nodoc:
+        @parent_transaction.isolation = isolation
+      end
+
       def materialize!
         connection.create_savepoint(savepoint_name)
         super
@@ -489,7 +497,7 @@ module ActiveRecord
 
       def rollback
         if materialized?
-          connection.rollback_db_transaction
+          connection.rollback_db_transaction unless @state.invalidated?
           connection.reset_isolation_level if isolation_level
         end
         @state.full_rollback!
@@ -651,6 +659,12 @@ module ActiveRecord
                   commit_transaction
                 rescue ActiveRecord::ConnectionFailed
                   transaction.invalidate! unless transaction.state.completed?
+                  raise
+                rescue ActiveRecord::TransactionRollbackError
+                  unless transaction.state.completed?
+                    transaction.invalidate!
+                    rollback_transaction(transaction)
+                  end
                   raise
                 rescue Exception
                   rollback_transaction(transaction) unless transaction.state.completed?

@@ -3,7 +3,6 @@
 require "fileutils"
 require "digest/md5"
 require "rails/version" unless defined?(Rails::VERSION)
-require "open-uri"
 require "tsort"
 require "uri"
 require "rails/generators"
@@ -16,7 +15,7 @@ module Rails
       include AppName
       include BundleHelper
 
-      NODE_LTS_VERSION = "20.11.1"
+      NODE_LTS_VERSION = "22.21.1"
       BUN_VERSION = "1.0.1"
 
       JAVASCRIPT_OPTIONS = %w( importmap bun webpack esbuild rollup )
@@ -105,6 +104,9 @@ module Rails
 
         class_option :skip_brakeman,       type: :boolean, default: nil,
                                            desc: "Skip brakeman setup"
+
+        class_option :skip_bundler_audit,  type: :boolean, default: nil,
+                                           desc: "Skip bundler-audit setup"
 
         class_option :skip_ci,             type: :boolean, default: nil,
                                            desc: "Skip GitHub CI files"
@@ -290,7 +292,7 @@ module Rails
       end
 
       def web_server_gemfile_entry # :doc:
-        GemfileEntry.new "puma", ">= 5.0", "Use the Puma web server [https://github.com/puma/puma]"
+        GemfileEntry.new "puma", ">= 7.1", "Use the Puma web server [https://github.com/puma/puma]"
       end
 
       def asset_pipeline_gemfile_entry
@@ -398,6 +400,10 @@ module Rails
 
       def skip_brakeman?
         options[:skip_brakeman]
+      end
+
+      def skip_bundler_audit?
+        options[:skip_bundler_audit]
       end
 
       def skip_ci?
@@ -529,6 +535,10 @@ module Rails
         using_js_runtime? && %w[bun].include?(options[:javascript])
       end
 
+      def using_css_bundling?
+        css_gemfile_entry&.name == "cssbundling-rails"
+      end
+
       def capture_command(command, pattern = nil)
         output = `#{command}`
         if pattern
@@ -621,6 +631,9 @@ module Rails
           packages << "python-is-python3"
         end
 
+        # ActiveStorage preview support
+        packages << "libvips" unless skip_active_storage?
+
         packages.compact.sort
       end
 
@@ -655,6 +668,11 @@ module Rails
           comment = "Use Redis adapter to run Action Cable in production"
           GemfileEntry.new("redis", ">= 4.0.1", comment, {}, true)
         end
+      end
+
+      def rails_command(command, command_options = {})
+        command_options[:capture] = true if options[:quiet]
+        super
       end
 
       def bundle_install?
@@ -753,6 +771,19 @@ module Rails
 
       def jruby?
         defined?(JRUBY_VERSION)
+      end
+
+      def version_manager_ruby_version
+        return ENV["RBENV_VERSION"] if ENV["RBENV_VERSION"]
+        return ENV["rvm_ruby_string"] if ENV["rvm_ruby_string"]
+
+        version = if RUBY_ENGINE == "ruby"
+          Gem.ruby_version.to_s.sub(/\.([a-zA-Z])/, '-\1')
+        else
+          RUBY_ENGINE_VERSION
+        end
+
+        "#{RUBY_ENGINE}-#{version}"
       end
 
       def empty_directory_with_keep_file(destination, config = {})

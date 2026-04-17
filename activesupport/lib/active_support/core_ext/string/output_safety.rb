@@ -116,7 +116,7 @@ module ActiveSupport # :nodoc:
       new_string = super
       new_safe_buffer = new_string.is_a?(SafeBuffer) ? new_string : SafeBuffer.new(new_string)
       if @html_unsafe
-        new_safe_buffer.instance_variable_set(:@html_unsafe, true)
+        new_safe_buffer.mark_unsafe!
       end
       new_safe_buffer
     end
@@ -129,7 +129,11 @@ module ActiveSupport # :nodoc:
         escaped_args = Array(args).map { |arg| explicit_html_escape_interpolated_argument(arg) }
       end
 
-      self.class.new(super(escaped_args))
+      new_safe_buffer = self.class.new(super(escaped_args))
+      if @html_unsafe
+        new_safe_buffer.mark_unsafe!
+      end
+      new_safe_buffer
     end
 
     def html_safe?
@@ -154,7 +158,7 @@ module ActiveSupport # :nodoc:
 
     UNSAFE_STRING_METHODS.each do |unsafe_method|
       if unsafe_method.respond_to?(unsafe_method)
-        class_eval <<-EOT, __FILE__, __LINE__ + 1
+        class_eval <<~RUBY, __FILE__, __LINE__ + 1
           def #{unsafe_method}(*args, &block)       # def capitalize(*args, &block)
             to_str.#{unsafe_method}(*args, &block)  #   to_str.capitalize(*args, &block)
           end                                       # end
@@ -163,12 +167,12 @@ module ActiveSupport # :nodoc:
             @html_unsafe = true                     #   @html_unsafe = true
             super                                   #   super
           end                                       # end
-        EOT
+        RUBY
       end
     end
 
     UNSAFE_STRING_METHODS_WITH_BACKREF.each do |unsafe_method|
-      class_eval <<-EOT, __FILE__, __LINE__ + 1
+      class_eval <<~RUBY, __FILE__, __LINE__ + 1
         def #{unsafe_method}(*args, &block)             # def gsub(*args, &block)
           if block                                      #   if block
             to_str.#{unsafe_method}(*args) { |*params|  #     to_str.gsub(*args) { |*params|
@@ -191,8 +195,13 @@ module ActiveSupport # :nodoc:
             super                                       #     super
           end                                           #   end
         end                                             # end
-      EOT
+      RUBY
     end
+
+    protected
+      def mark_unsafe!
+        @html_unsafe = true
+      end
 
     private
       def explicit_html_escape_interpolated_argument(arg)

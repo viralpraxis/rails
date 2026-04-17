@@ -408,6 +408,20 @@ class BelongsToAssociationsTest < ActiveRecord::TestCase
     assert_equal 3, book.shop_id
   end
 
+  def test_clearing_optional_cpk_belongs_to_should_preserve_shared_pk
+    book = Cpk::Book.create!(id: [1, 2], title: "The Well-Grounded Rubyist")
+    chapter = Cpk::OptionalChapter.create!(id: [1, 2], book: book)
+
+    assert_equal book, chapter.book
+    assert_equal [1, 2], chapter.id
+
+    chapter.update!(book: nil)
+
+    assert_equal [1, 2], chapter.id
+    assert_nil chapter.book_id
+    assert_equal chapter.author_id, book.author_id
+  end
+
   def test_should_reload_association_on_model_with_query_constraints_when_foreign_key_changes
     blog = Sharded::Blog.create!
     blog_post = Sharded::BlogPost.create!(blog: blog)
@@ -1806,6 +1820,32 @@ class BelongsToAssociationsTest < ActiveRecord::TestCase
     end
   end
 
+  test "skips parent presence check for composite foreign key if parent has not changed" do
+    order = Cpk::Order.create!(id: [1, 2])
+    book = Cpk::BookWithRequiredOrder.create!(id: [3, 4], order: order, title: "Book")
+    book.reload
+
+    assert_no_queries do
+      assert book.valid?
+    end
+  end
+
+  test "validates composite foreign key belongs_to when foreign key column is nil" do
+    book = Cpk::BookWithRequiredOrder.new(id: [1, 1], shop_id: nil, order_id: nil, title: "Book")
+    assert_not book.valid?
+    assert_includes book.errors.full_messages, "Order must exist"
+  end
+
+  test "validates composite foreign key belongs_to when foreign key column changes" do
+    order = Cpk::Order.create!(id: [1, 2])
+    book = Cpk::BookWithRequiredOrder.create!(id: [3, 4], order: order, title: "Book")
+    book.reload
+
+    book.order_id = 999999
+    assert_not book.valid?
+    assert_includes book.errors.full_messages, "Order must exist"
+  end
+
   test "runs parent presence check if parent has not changed and belongs_to_required_validates_foreign_key is set" do
     original_value = ActiveRecord.belongs_to_required_validates_foreign_key
     ActiveRecord.belongs_to_required_validates_foreign_key = true
@@ -1889,13 +1929,9 @@ class AsyncBelongsToAssociationsTest < ActiveRecord::TestCase
       client.association(:firm).async_load_target
       wait_for_async_query
 
-      events = []
-      callback = -> (event) do
-        events << event unless event.payload[:name] == "SCHEMA"
-      end
-      ActiveSupport::Notifications.subscribed(callback, "sql.active_record") do
+      events = capture_notifications("sql.active_record") do
         client.firm
-      end
+      end.reject { |e| e.payload[:name] == "SCHEMA" }
 
       assert_no_queries do
         assert_equal first_firm, client.firm
