@@ -135,25 +135,33 @@ module ActiveRecord
 
     def self.create(connection, callable = nil, &block)
       relation = (callable || block).call Params.new
-      query_builder, binds = connection.cacheable_query(self, relation.arel)
+      arel = relation.arel
+      query_builder, binds = connection.cacheable_query(self, arel)
       bind_map = BindMap.new(binds)
-      new(query_builder, bind_map, relation.model)
+      new(query_builder, bind_map, relation.model, unordered: ConnectionAdapters::QueryIntent.unordered_select?(arel))
     end
 
-    def initialize(query_builder, bind_map, model)
+    def initialize(query_builder, bind_map, model, unordered: false)
       @query_builder = query_builder
       @bind_map = bind_map
       @model = model
+      @unordered = unordered
     end
 
     def execute(params, connection, async: false, &block)
       bind_values = @bind_map.bind params
       sql = @query_builder.sql_for bind_values, connection
 
+      # The arel was compiled to a SQL string when this cache was built, so the
+      # adapter can no longer work out whether the query is ordered. Pass the
+      # answer down instead of reversing here, so that the reversal still happens
+      # below the query cache. See ActiveRecord.reverse_unordered_selects.
+      reverse_rows = @unordered && ActiveRecord.reverse_unordered_selects
+
       if async
-        @model.async_find_by_sql(sql, bind_values, preparable: true, allow_retry: @query_builder.retryable, &block)
+        @model.async_find_by_sql(sql, bind_values, preparable: true, allow_retry: @query_builder.retryable, reverse_rows: reverse_rows, &block)
       else
-        @model.find_by_sql(sql, bind_values, preparable: true, allow_retry: @query_builder.retryable, &block)
+        @model.find_by_sql(sql, bind_values, preparable: true, allow_retry: @query_builder.retryable, reverse_rows: reverse_rows, &block)
       end
     rescue ::RangeError
       async ? Promise.wrap([]) : []

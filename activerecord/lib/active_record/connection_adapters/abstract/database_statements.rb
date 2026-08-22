@@ -74,8 +74,14 @@ module ActiveRecord
       end
 
       # Returns an ActiveRecord::Result instance.
-      def select_all(arel, name = nil, binds = [], preparable: nil, async: false, allow_retry: false)
+      #
+      # +reverse_rows+ overrides whether the returned rows are reversed. When it is
+      # +nil+ the decision is made from +arel+, which is what callers that build a
+      # query themselves want; callers that have already compiled the query to a SQL
+      # string have to pass it. See ActiveRecord.reverse_unordered_selects.
+      def select_all(arel, name = nil, binds = [], preparable: nil, async: false, allow_retry: false, reverse_rows: nil)
         arel = arel_from_relation(arel)
+        reverse_rows = QueryIntent.reverse_rows?(arel) if reverse_rows.nil?
         intent = QueryIntent.new(
           adapter: self,
           arel: arel,
@@ -83,7 +89,8 @@ module ActiveRecord
           binds: binds,
           prepare: prepared_statements && preparable,
           allow_async: async,
-          allow_retry: allow_retry
+          allow_retry: allow_retry,
+          reverse_rows: reverse_rows
         )
 
         intent.execute!

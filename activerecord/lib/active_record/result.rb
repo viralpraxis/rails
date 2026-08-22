@@ -214,8 +214,16 @@ module ActiveRecord
     end
 
     def initialize_copy(other)
-      @rows = rows.dup
+      @rows         = rows.dup
       @hash_rows    = nil
+      @indexed_rows = nil
+    end
+
+    # Returns a copy of this result with its rows in reverse order.
+    def reverse_rows # :nodoc:
+      copy = dup
+      copy.rows.reverse!
+      copy
     end
 
     def freeze # :nodoc:

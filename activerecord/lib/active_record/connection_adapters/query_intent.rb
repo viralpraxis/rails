@@ -35,7 +35,7 @@ module ActiveRecord
       attr_accessor :adapter, :binds, :ran_async, :notification_payload
 
       def initialize(adapter:, arel: nil, raw_sql: nil, processed_sql: nil, name: "SQL", binds: [], prepare: false, allow_async: false,
-                     allow_retry: false, materialize_transactions: true, batch: false)
+                     allow_retry: false, materialize_transactions: true, batch: false, reverse_rows: false)
         if arel.nil? && raw_sql.nil? && processed_sql.nil?
           raise ArgumentError, "One of arel, raw_sql, or processed_sql must be provided"
         end
@@ -51,6 +51,7 @@ module ActiveRecord
         @allow_retry = allow_retry
         @materialize_transactions = materialize_transactions
         @batch = batch
+        @reverse_rows = reverse_rows
         @processed_sql = processed_sql
         @type_casted_binds = nil
         @notification_payload = nil
@@ -66,6 +67,20 @@ module ActiveRecord
         @error = nil
         @lock_wait = nil
         @event_buffer = nil
+      end
+
+      # Whether +arel+ is a SELECT Active Record built itself that carries no
+      # ORDER BY clause, and whose row order is therefore unspecified. Queries
+      # passed in as raw SQL strings are not recognized.
+      def self.unordered_select?(arel)
+        ast = arel.respond_to?(:ast) ? arel.ast : arel
+        Arel::Nodes::SelectStatement === ast && ast.orders.empty?
+      end
+
+      # Whether the rows returned for +arel+ should be reversed.
+      # See ActiveRecord.reverse_unordered_selects.
+      def self.reverse_rows?(arel)
+        ActiveRecord.reverse_unordered_selects && unordered_select?(arel)
       end
 
       # Returns a hash representation of the QueryIntent for debugging/introspection
@@ -223,7 +238,10 @@ module ActiveRecord
         raise "Cannot call cast_result after affected_rows has been called" if defined?(@affected_rows)
 
         ensure_result
-        @cast_result ||= adapter.send(:cast_result, @raw_result)
+        @cast_result ||= begin
+          result = adapter.send(:cast_result, @raw_result)
+          @reverse_rows ? result.reverse_rows : result
+        end
       end
 
       def affected_rows

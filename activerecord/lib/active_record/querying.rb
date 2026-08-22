@@ -60,24 +60,24 @@ module ActiveRecord
     #
     # Note that building your own SQL query string from user input {may expose your application to
     # injection attacks}[https://guides.rubyonrails.org/security.html#sql-injection].
-    def find_by_sql(sql, binds = [], preparable: nil, allow_retry: false, &block)
+    def find_by_sql(sql, binds = [], preparable: nil, allow_retry: false, reverse_rows: nil, &block)
       result = with_connection do |c|
-        _query_by_sql(c, sql, binds, preparable: preparable, allow_retry: allow_retry)
+        _query_by_sql(c, sql, binds, preparable: preparable, allow_retry: allow_retry, reverse_rows: reverse_rows)
       end
       _load_from_sql(result, &block)
     end
 
     # Same as #find_by_sql but perform the query asynchronously and returns an ActiveRecord::Promise.
-    def async_find_by_sql(sql, binds = [], preparable: nil, allow_retry: false, &block)
+    def async_find_by_sql(sql, binds = [], preparable: nil, allow_retry: false, reverse_rows: nil, &block)
       with_connection do |c|
-        _query_by_sql(c, sql, binds, preparable: preparable, allow_retry: allow_retry, async: true)
+        _query_by_sql(c, sql, binds, preparable: preparable, allow_retry: allow_retry, async: true, reverse_rows: reverse_rows)
       end.then do |result|
         _load_from_sql(result, &block)
       end
     end
 
-    def _query_by_sql(connection, sql, binds = [], preparable: nil, async: false, allow_retry: false) # :nodoc:
-      connection.select_all(_sql_for_find(sql), "#{name} Load", binds, preparable: preparable, async: async, allow_retry: allow_retry)
+    def _query_by_sql(connection, sql, binds = [], preparable: nil, async: false, allow_retry: false, reverse_rows: nil) # :nodoc:
+      connection.select_all(_sql_for_find(sql), "#{name} Load", binds, preparable: preparable, async: async, allow_retry: allow_retry, reverse_rows: reverse_rows)
     end
 
     def _load_from_sql(result_set, &block) # :nodoc:

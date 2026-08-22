@@ -1,3 +1,23 @@
+*   Add `config.active_record.reverse_unordered_selects`.
+
+    When enabled, Active Record reverses the rows of every `SELECT` it generates
+    that has no `ORDER BY` clause. The order of such a query is not specified, so
+    this surfaces code and tests that accidentally depend on the order a given
+    database happens to return today. Queries written as raw SQL strings are left
+    untouched.
+
+    Rows are reversed after the database returns them, so queries ending in
+    `LIMIT 1` (`find`, `find_by`, `take`, `pick`, `has_one`) are unaffected, and
+    a query that has an `ORDER BY` is never reversed even when that ordering is
+    not a total order.
+
+    Intended for the test environment. Disabled by default.
+
+        # config/environments/test.rb
+        config.active_record.reverse_unordered_selects = true
+
+    *viralpraxis*
+
 *   Deprecate `ActiveRecord::Relation#uniq!`.
 
     The method was added in Rails 6.1 (#39358) as part of the migration path

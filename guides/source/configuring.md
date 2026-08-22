@@ -1987,6 +1987,35 @@ The default value depends on the `config.load_defaults` target version:
 | (original)            | `false`              |
 | 8.1                   | `true`               |
 
+#### `config.active_record.reverse_unordered_selects`
+
+Reverses the rows of every `SELECT` Active Record generates that has no `ORDER BY` clause.
+
+The order of such a query is not specified: the database is free to return the rows in any order, and that
+order can change when an index is added, when the data grows, or when the query planner changes its mind.
+Enabling this option makes the lack of order explicit, so code and tests that accidentally depend on the
+order a particular database happens to return today fail immediately instead of breaking later.
+
+Rows are reversed after the database has returned them, which bounds what the option can surface:
+
+* Queries you write as raw SQL strings are left untouched, since Active Record cannot tell whether they are ordered.
+* Queries that end in `LIMIT 1` are unaffected, because the database has already chosen the row. That covers
+  `find`, `find_by`, `take`, `pick`, `exists?`, and `has_one` / `belongs_to` associations. Note this is weaker
+  than SQLite's `reverse_unordered_selects` pragma, which reverses the scan itself and so changes *which* row a
+  `LIMIT` returns.
+* A query with an `ORDER BY` is never reversed, even when that ordering is not a total order. Ties within an
+  `ORDER BY` on a non-unique column stay unspecified and stay hidden.
+* The SQL Rails logs is the SQL that was sent to the database, so replaying it by hand will not reproduce the
+  order your application saw.
+
+Do not enable this at the same time as SQLite's `reverse_unordered_selects` pragma: the two reversals cancel
+out and you get the original order back, with no indication that either is switched off.
+
+The option is read on every query, but it is meant to be set once at boot rather than toggled at runtime.
+
+This is a development aid intended for the test environment, and it is never enabled by `config.load_defaults`.
+The default value is `false`.
+
 ### Configuring Action Controller
 
 `config.action_controller` includes a number of configuration settings:

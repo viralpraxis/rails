@@ -165,5 +165,40 @@ module ActiveRecord
         result.column_types["col2"].deserialize("test value")
       end
     end
+
+    test "reverse_rows returns a copy with the rows reversed" do
+      result = ActiveRecord::Result.new(["col_1", "col_2"], [["row 1 col 1", "row 1 col 2"], ["row 2 col 1", "row 2 col 2"]])
+      reversed = result.reverse_rows
+
+      assert_equal [["row 2 col 1", "row 2 col 2"], ["row 1 col 1", "row 1 col 2"]], reversed.rows
+      assert_equal [{ "col_1" => "row 2 col 1", "col_2" => "row 2 col 2" }, { "col_1" => "row 1 col 1", "col_2" => "row 1 col 2" }], reversed.to_a
+      assert_equal "row 2 col 1", reversed.indexed_rows.first["col_1"]
+    end
+
+    test "reverse_rows leaves the receiver untouched" do
+      rows = [["row 1 col 1", "row 1 col 2"], ["row 2 col 1", "row 2 col 2"]]
+      result = ActiveRecord::Result.new(["col_1", "col_2"], rows)
+      original = result.rows.dup
+
+      result.reverse_rows
+
+      assert_equal original, result.rows
+      assert_equal original, rows, "the array handed to the constructor must not be mutated"
+    end
+
+    test "reverse_rows works on a frozen result whose caches are already warm" do
+      result = ActiveRecord::Result.new(["col_1"], [["a"], ["b"], ["c"]]).freeze
+      reversed = result.reverse_rows
+
+      assert_not_predicate reversed, :frozen?
+      assert_equal [["c"], ["b"], ["a"]], reversed.rows
+      assert_equal ["c", "b", "a"], reversed.indexed_rows.map { |row| row["col_1"] }
+      assert_equal [["a"], ["b"], ["c"]], result.rows
+    end
+
+    test "reverse_rows on an empty result" do
+      assert_empty ActiveRecord::Result.empty.reverse_rows.rows
+      assert_equal 3, ActiveRecord::Result.empty(affected_rows: 3).reverse_rows.affected_rows
+    end
   end
 end

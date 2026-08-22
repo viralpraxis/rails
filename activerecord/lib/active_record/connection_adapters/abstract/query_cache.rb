@@ -260,8 +260,12 @@ module ActiveRecord
         pool.clear_query_cache
       end
 
-      def select_all(arel, name = nil, binds = [], preparable: nil, async: false, allow_retry: false) # :nodoc:
+      def select_all(arel, name = nil, binds = [], preparable: nil, async: false, allow_retry: false, reverse_rows: nil) # :nodoc:
         arel = arel_from_relation(arel)
+
+        # Compiling the arel to SQL discards what the reversal decision is based
+        # on, so it has to be made here and passed down explicitly.
+        reverse_rows = QueryIntent.reverse_rows?(arel) if reverse_rows.nil?
 
         # If arel is locked this is a SELECT ... FOR UPDATE or somesuch.
         # Such queries should not be cached.
@@ -269,10 +273,10 @@ module ActiveRecord
           sql, binds, preparable, allow_retry = to_sql_and_binds(arel, binds, preparable, allow_retry)
 
           if async
-            result = lookup_sql_cache(sql, name, binds) || super(sql, name, binds, preparable: preparable, async: async, allow_retry: allow_retry)
+            result = lookup_sql_cache(sql, name, binds, reverse_rows) || super(sql, name, binds, preparable: preparable, async: async, allow_retry: allow_retry, reverse_rows: reverse_rows)
             FutureResult.wrap(result)
           else
-            cache_sql(sql, name, binds) { super(sql, name, binds, preparable: preparable, async: async, allow_retry: allow_retry) }
+            cache_sql(sql, name, binds, reverse_rows) { super(sql, name, binds, preparable: preparable, async: async, allow_retry: allow_retry, reverse_rows: reverse_rows) }
           end
         else
           super
@@ -284,8 +288,17 @@ module ActiveRecord
           @query_cache = nil
         end
 
-        def lookup_sql_cache(sql, name, binds)
+        # Two different queries can compile to the same SQL while disagreeing on
+        # whether their rows get reversed - a relation and the raw SQL string
+        # that happens to match it, say - so the reversal has to be part of the
+        # key. When nothing is reversed the key is unchanged.
+        def query_cache_key(sql, binds, reverse_rows)
           key = binds.empty? ? sql : [sql, binds]
+          reverse_rows ? [key, :reversed] : key
+        end
+
+        def lookup_sql_cache(sql, name, binds, reverse_rows = false)
+          key = query_cache_key(sql, binds, reverse_rows)
 
           result = nil
           @lock.synchronize do
@@ -302,8 +315,8 @@ module ActiveRecord
           result
         end
 
-        def cache_sql(sql, name, binds)
-          key = binds.empty? ? sql : [sql, binds]
+        def cache_sql(sql, name, binds, reverse_rows = false)
+          key = query_cache_key(sql, binds, reverse_rows)
           result = nil
           hit = true
 
